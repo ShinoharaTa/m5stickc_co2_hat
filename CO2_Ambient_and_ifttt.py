@@ -5,11 +5,12 @@ import utime
 import uos
 import _thread
 import ntptime
+from tiny_ifttt import tiny_ifttt
 
 
 # 変数宣言
 Am_err              = 1     # グローバル
-Disp_mode           = 0     # グローバル
+Disp_mode           = 1     # グローバル
 lcd_mute            = False # グローバル
 data_mute           = False # グローバル
 am_interval         = 60    # Ambientへデータを送るサイクル（秒）
@@ -18,6 +19,7 @@ TIMEOUT             = 30    # 何らかの事情でCO2更新が止まった時�
 CO2_RED             = 1000  # co2濃度の換気閾値（ppm）のデフォルト値
 AM_ID               = None
 AM_WKEY             = None
+IFTTT_KEY           = None
 co2                 = 0
 
 
@@ -36,7 +38,7 @@ axp = AXPCompat()
 def time_count ():
     global Disp_mode
     global Am_err
-    
+
     while True:
         if Am_err == 0 : # Ambient通信不具合発生時は時計の文字が赤くなる
             fc = lcd.WHITE
@@ -51,9 +53,30 @@ def time_count ():
             lcd.rect(0 , 0, 13, 160, lcd.BLACK, lcd.BLACK)
             lcd.font(lcd.FONT_DefaultSmall, rotate = 270)
             lcd.print('{}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}'.format(*time.localtime()[:6]), 2, 125, fc)
-		
+
         utime.sleep(1)
 
+def fan_control ():
+    global co2
+
+    my_key = IFTTT_KEY
+
+    # 初期化
+    ti= tiny_ifttt(my_key, debug=True)
+
+    state = False
+    while True:
+        # フラグONかつ500未満で換気扇OFF
+        if co2 < 500:
+            if state == True:
+                ti.trigger('Fan_control_off', value1='', value2='', value3='')
+                state = False
+
+        # フラグOFFかつ1400以上で換気扇ON
+        if co2 >= 1400:
+            if state == False:
+                ti.trigger('Fan_control_on', value1='', value2='', value3='')
+                state = True
 
 # 表示OFFボタン処理スレッド関数
 def buttonA_wasPressed():
@@ -78,7 +101,7 @@ def buttonB_wasPressed():
         Disp_mode = 0
     else :
         Disp_mode = 1
-    
+
     draw_lcd()
 
 
@@ -115,7 +138,7 @@ def draw_co2():
             fc = lcd.WHITE
             if lcd_mute == True :
                 axp.setLDO2Vol(0)   # バックライト輝度調整（中くらい）
-	
+
     if Disp_mode == 1 : # 表示回転処理
         lcd.rect(0, 0, 65, 160, lcd.BLACK, lcd.BLACK)
         lcd.font(lcd.FONT_DejaVu18, rotate = 90) # 単位(ppm)の表示
@@ -154,7 +177,7 @@ def co2_set_filechk():
     for file_name in uos.listdir('/flash') :
         if file_name == 'co2_set.txt' :
             scanfile_flg = True
-    
+
     if scanfile_flg :
         print('>> found [co2_set.txt] !')
         with open('/flash/co2_set.txt' , 'r') as f :
@@ -175,8 +198,11 @@ def co2_set_filechk():
                     if len(filetxt[1]) == 16 :
                         AM_WKEY = str(filetxt[1])
                         print('- AM_WKEY: ' + str(AM_WKEY))
+                elif filetxt[0] == 'IFTTT_KEY' :
+                    IFTTT_KEY = str(filetxt[1])
+                    print('- IFTTT_KEY: ' + str(IFTTT_KEY))
     else :
-        print('>> no [co2_set.txt] !')       
+        print('>> no [co2_set.txt] !')
     return scanfile_flg
 
 
@@ -215,6 +241,8 @@ utime.localtime(ntptime.settime())
 # 時刻表示スレッド起動
 _thread.start_new_thread(time_count , ())
 
+# IFTTT 要求スレッド起動
+_thread.start_new_thread(fan_control, ())
 
 # ボタン検出スレッド起動
 btnA.wasPressed(buttonA_wasPressed)
@@ -253,10 +281,10 @@ while True:
                         print('Ambient send ERR! / ' + str(Am_err))
                         Am_err = Am_err + 1
         utime.sleep(1)
-    
+
     if (utime.time() - co2_tc) >= TIMEOUT : # co2応答が一定時間無い場合はCO2値表示のみオフ
         data_mute = True
         draw_co2()
-	
+
     utime.sleep(0.1)
-    gc.collect()    
+    gc.collect()
